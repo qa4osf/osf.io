@@ -18,6 +18,7 @@ from django.contrib.contenttypes.models import ContentType
 from addons.base.models import BaseStorageAddon
 from addons.osfstorage.models import OsfStorageFile
 from addons.osfstorage.models import OsfStorageFileNode
+from addons.osfstorage.utils import update_analytics
 
 from framework import sentry
 from framework.auth import Auth
@@ -312,8 +313,6 @@ DOWNLOAD_ACTIONS = set([
 ])
 
 
-# TODO: Use this to mark file versions as seen when
-# MFR callback endpoint is implemented
 def mark_file_version_as_seen(user, path, version):
     """
     Mark a file version as seen by the given user.
@@ -334,12 +333,23 @@ def create_waterbutler_log(payload, **kwargs):
     with transaction.atomic():
         try:
             auth = payload['auth']
+            user = OSFUser.load(auth['id'])
             # Don't log download actions, but do update analytics
             if payload['action'] in DOWNLOAD_ACTIONS:
                 node = AbstractNode.load(payload['metadata']['nid'])
+                url = furl.furl(payload['request_meta']['url'])
+                version = url.args.get('version') or url.args.get('revision')
+                path = payload['metadata']['path'].lstrip('/')
+                if user:
+                    mark_file_version_as_seen(user, path, version)
+                if not node.is_contributor(user):
+                    if payload['action_meta']['is_mfr_render']:
+                        update_analytics(node, path, version, 'view')
+                    else:
+                        update_analytics(node, path, version, 'download')
+
                 return {'status': 'success'}
 
-            user = OSFUser.load(auth['id'])
             if user is None:
                 raise HTTPError(httplib.BAD_REQUEST)
 
